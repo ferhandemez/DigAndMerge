@@ -1,0 +1,408 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ASMR Testere - Kaos Modu</title>
+    <style>
+        body { 
+            margin: 0; overflow: hidden; background-color: #1a1a1a; 
+            font-family: 'Segoe UI', sans-serif; touch-action: none;
+            display: flex; justify-content: center; align-items: center; height: 100vh;
+        }
+        #game-container {
+            position: relative; background-color: #05050a;
+            box-shadow: 0 0 50px rgba(0,0,0,0.8); overflow: hidden;
+        }
+        canvas { display: block; }
+        #hud {
+            position: absolute; top: 20px; left: 50%; transform: translateX(-50%);
+            width: 80%; text-align: center; pointer-events: none; user-select: none; z-index: 10;
+        }
+        #energy-container {
+            width: 100%; height: 20px; background: rgba(255,255,255,0.1);
+            border-radius: 10px; border: 2px solid #333; overflow: hidden; position: relative;
+        }
+        #energy-bar { width: 0%; height: 100%; background: linear-gradient(90deg, #00f2fe, #74ebd5); transition: width 0.1s linear; }
+        .ready { box-shadow: 0 0 15px #00f2fe; border-color: #00f2fe !important; }
+        #info { color: white; margin-top: 8px; font-size: 14px; text-shadow: 0 2px 4px black; }
+        #timer {
+            position: absolute; top: 20px; right: 20px; color: #fff; font-size: 24px; font-weight: bold;
+            background: rgba(0,0,0,0.5); padding: 5px 10px; border-radius: 5px; pointer-events: none;
+        }
+        .timer-danger { color: #ff4d4d !important; animation: pulse 1s infinite; }
+        #overlay {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.85); display: none;
+            flex-direction: column; justify-content: center; align-items: center; color: white; z-index: 20;
+        }
+        #overlay h1 { font-size: 40px; margin: 0 0 20px 0; text-transform: uppercase; letter-spacing: 2px; }
+        #overlay p { font-size: 18px; color: #ccc; }
+        #restart-btn {
+            margin-top: 30px; padding: 15px 40px; font-size: 20px;
+            background: #00f2fe; border: none; border-radius: 30px; cursor: pointer; font-weight: bold; color: #000; transition: transform 0.2s;
+        }
+        #restart-btn:hover { transform: scale(1.1); background: #fff; }
+        @keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.5; } 100% { opacity: 1; } }
+    </style>
+</head>
+<body>
+
+<div id="game-container">
+    <div id="hud">
+        <div id="energy-container"><div id="energy-bar"></div></div>
+        <div id="info">ENERJİ DOLUYOR...</div>
+    </div>
+    <div id="timer">01:30</div>
+    <div id="overlay">
+        <h1 id="end-title">OYUN BİTTİ</h1>
+        <p id="end-score">Kalan Blok: %0</p>
+        <button id="restart-btn" onclick="location.reload()">TEKRAR DENE</button>
+    </div>
+    <canvas id="gameCanvas"></canvas>
+</div>
+
+<script>
+    const canvas = document.getElementById('gameCanvas');
+    const container = document.getElementById('game-container');
+    const ctx = canvas.getContext('2d');
+    const timerEl = document.getElementById('timer');
+    const overlay = document.getElementById('overlay');
+    const endTitle = document.getElementById('end-title');
+    const endScore = document.getElementById('end-score');
+
+    let width, height;
+    const PIXEL_SIZE = 14; 
+    const EXPLOSION_RADIUS = 70; // Patlama yarıçapı
+    
+    const GAME_DURATION = 90;
+    let timeLeft = GAME_DURATION;
+    let gameRunning = true;
+    let totalStartPixels = 0;
+    let currentPixels = 0;
+    let lastTime = Date.now();
+
+    const GRAVITY = 0.45;
+    const GROUND_FRICTION = 0.85; 
+    const AIR_RESISTANCE = 0.99;
+    const WALL_BOUNCE = -0.6;
+    const BASE_ROTATION_SPEED = 0.05; 
+    
+    let energy = 0;
+    const MAX_ENERGY = 100;
+    const REGEN_SPEED = 0.85; 
+    let explosionFx = []; // Parlama efektleri
+    let particles = []; // YENİ: Parçacık efektleri
+
+    const PIXEL_GRADIENT = [
+        "#2a0a40", "#35105a", "#401575", "#4b1a90", 
+        "#5620aa", "#6225c5", "#7a1a1a", "#901c1c", 
+        "#a61e1e", "#bc2121", "#d22424", "#e05020", 
+        "#e08020", "#e0b020", "#d2c824", "#b0c224", 
+        "#90c224", "#70c224", "#50c224", "#30ff30"  
+    ];
+    const SAW_COLORS = ['#7f8c8d', '#ff9f43', '#ee5253', '#00d2d3', '#5f27cd', '#feca57', '#ff4dff', '#48dbfb', '#1dd1a1', '#ff6b6b', '#ffffff'];
+
+    // YENİ: Parçacık Sınıfı
+    class Particle {
+        constructor(x, y, color) {
+            this.x = x; this.y = y;
+            const angle = Math.random() * Math.PI * 2;
+            const speed = Math.random() * 6 + 3; // Hızlı fırlasınlar
+            this.vx = Math.cos(angle) * speed;
+            this.vy = Math.sin(angle) * speed;
+            this.life = 1.0; 
+            this.decay = Math.random() * 0.03 + 0.02;
+            this.color = color;
+            this.size = Math.random() * 5 + 3;
+        }
+        update() {
+            this.x += this.vx;
+            this.y += this.vy;
+            this.vy += 0.15; // Yerçekimi
+            this.life -= this.decay;
+        }
+        draw(ctx) {
+            ctx.save();
+            ctx.globalAlpha = this.life;
+            ctx.fillStyle = this.color;
+            ctx.beginPath();
+            ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.restore();
+        }
+    }
+
+    class Pixel {
+        constructor(x, y, isBattery, isBomb, maxHealth) {
+            this.x = x; this.y = y;
+            this.size = PIXEL_SIZE;
+            this.isBattery = isBattery;
+            this.isBomb = isBomb;
+            this.maxHealth = maxHealth; 
+            this.health = this.maxHealth;
+            this.active = true;
+        }
+
+        updateColor() {
+            if (this.isBattery) {
+                let glow = Math.sin(Date.now() / 100) * 50 + 200;
+                this.color = `rgb(0, ${glow}, 255)`; return;
+            }
+            if (this.isBomb) {
+                // Dış çerçeve rengi (Yanıp sönen koyu kırmızı)
+                let glow = Math.sin(Date.now() / 50) * 50 + 150;
+                this.color = `rgb(${glow}, 0, 0)`; return;
+            }
+            let ratio = this.health / 4500; ratio = Math.max(0, Math.min(ratio, 1)); 
+            let index = Math.floor((1 - ratio) * (PIXEL_GRADIENT.length - 1));
+            this.color = PIXEL_GRADIENT[index];
+        }
+
+        draw() {
+            if (!this.active) return;
+            this.updateColor();
+            ctx.fillStyle = this.color;
+            ctx.fillRect(this.x, this.y, this.size, this.size);
+            if (this.isBattery) {
+                ctx.fillStyle = "white"; ctx.fillRect(this.x + 4, this.y + 4, this.size - 8, this.size - 8);
+            }
+            // YENİ: Daha büyük ve belirgin bomba ikonu
+            if (this.isBomb) {
+                ctx.fillStyle = "#ffff00"; // Sarı gövde
+                ctx.fillRect(this.x + 2, this.y + 2, this.size - 4, this.size - 4);
+                ctx.fillStyle = "#ff0000"; // Kırmızı merkez nokta
+                ctx.fillRect(this.x + 5, this.y + 5, this.size - 10, this.size - 10);
+            }
+        }
+    }
+
+    class Saw {
+        constructor(x, y, value) {
+            this.x = x; this.y = y; this.value = value;
+            this.vx = 0; this.vy = 0; this.rotation = 0;
+            this.isMerging = false;
+            this.updateStats();
+        }
+        updateStats() {
+            this.radius = 18 + (this.value * 5); 
+            this.damagePerFrame = (25 + (this.value * 10)) / 5; 
+            this.damageRange = this.radius + (25 * this.value);
+        }
+        draw() {
+            ctx.save(); ctx.translate(this.x, this.y);
+            this.rotation += BASE_ROTATION_SPEED + (this.value * 0.005); ctx.rotate(this.rotation);
+            const teeth = 10 + (this.value * 2); ctx.beginPath();
+            for (let i = 0; i < teeth * 2; i++) {
+                const r = (i % 2 === 0) ? this.radius : this.radius * 0.75;
+                const angle = (Math.PI * 2 * i) / (teeth * 2); ctx.lineTo(Math.cos(angle) * r, Math.sin(angle) * r);
+            }
+            ctx.closePath(); ctx.fillStyle = SAW_COLORS[Math.min(this.value, 10)]; ctx.fill();
+            ctx.strokeStyle = "rgba(255,255,255,0.7)"; ctx.lineWidth = 2; ctx.stroke(); ctx.restore();
+            ctx.fillStyle = 'white'; ctx.font = `bold ${this.radius * 0.7}px Arial`;
+            ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(this.value, this.x, this.y);
+        }
+        update() {
+            this.vy += GRAVITY; this.vx *= AIR_RESISTANCE; this.x += this.vx; this.y += this.vy;
+            if (this.x - this.radius < 0) { this.x = this.radius; this.vx *= WALL_BOUNCE; }
+            else if (this.x + this.radius > width) { this.x = width - this.radius; this.vx *= WALL_BOUNCE; }
+            this.handleCollisionAndDamage();
+        }
+        handleCollisionAndDamage() {
+            let range = Math.ceil(this.damageRange / PIXEL_SIZE);
+            let gx = Math.floor(this.x / PIXEL_SIZE);
+            let gy = Math.floor(this.y / PIXEL_SIZE);
+            for (let y = gy - range; y <= gy + range; y++) {
+                if (!pixels[y]) continue;
+                for (let x = gx - range; x <= gx + range; x++) {
+                    let p = pixels[y][x];
+                    if (p && p.active) {
+                        let dx = (p.x + PIXEL_SIZE/2) - this.x;
+                        let dy = (p.y + PIXEL_SIZE/2) - this.y;
+                        let dist = Math.sqrt(dx*dx + dy*dy);
+
+                        // YENİ: ANINDA PATLAMA KONTROLÜ (Temas anında)
+                        // Testere diski bombaya dokundu mu? (Hasar menzili değil, fiziksel yarıçap)
+                        if (p.isBomb && dist < this.radius + PIXEL_SIZE * 0.8) {
+                             explode(p.x + PIXEL_SIZE/2, p.y + PIXEL_SIZE/2);
+                             // Bomba pikselleri explode fonksiyonunda zaten silinecek ama garanti olsun.
+                             if(p.active) { p.active = false; currentPixels--; }
+                             continue; // Bu piksel patladı, sonrakine geç
+                        }
+
+                        if (dist < this.damageRange) {
+                            let falloff = Math.pow(1 - (dist / this.damageRange), 1.3);
+                            p.health -= this.damagePerFrame * falloff;
+                            if (p.health <= 0) {
+                                p.active = false; currentPixels--;
+                                if (p.isBattery) energy = MAX_ENERGY;
+                                // Buradaki eski bomba kontrolü kaldırıldı.
+                            }
+                        }
+                        if (dist < this.radius + 2) {
+                            if (this.vy > 0 && this.y < p.y) {
+                                this.y = p.y - this.radius; if (this.vy > 1.5) { this.vy *= -0.3; } else { this.vy = 0; } this.vx *= GROUND_FRICTION;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    function explode(bx, by) {
+        // Parlama Efekti
+        explosionFx.push({x: bx, y: by, r: 10, maxR: EXPLOSION_RADIUS * 1.5, alpha: 1.0});
+
+        // YENİ: Parçacık Efektleri Oluştur
+        for (let i = 0; i < 35; i++) {
+            const colors = ['#ff0000', '#ff7700', '#ffff00', '#ffffff'];
+            const color = colors[Math.floor(Math.random() * colors.length)];
+            particles.push(new Particle(bx, by, color));
+        }
+
+        let rangeGrid = Math.ceil(EXPLOSION_RADIUS / PIXEL_SIZE);
+        let gx = Math.floor(bx / PIXEL_SIZE);
+        let gy = Math.floor(by / PIXEL_SIZE);
+
+        for (let y = gy - rangeGrid; y <= gy + rangeGrid; y++) {
+            if (!pixels[y]) continue;
+            for (let x = gx - rangeGrid; x <= gx + rangeGrid; x++) {
+                let p = pixels[y][x];
+                if (p && p.active) {
+                    let dx = (p.x + PIXEL_SIZE/2) - bx;
+                    let dy = (p.y + PIXEL_SIZE/2) - by;
+                    let dist = Math.sqrt(dx*dx + dy*dy);
+                    if (dist < EXPLOSION_RADIUS) {
+                        p.health = 0; p.active = false; currentPixels--;
+                    }
+                }
+            }
+        }
+    }
+
+    let pixels = []; let saws = [];
+
+    function init() {
+        resize(); window.addEventListener('resize', resize); initPixels();
+        canvas.addEventListener('pointerdown', (e) => {
+            if (!gameRunning) return;
+            if (energy >= MAX_ENERGY) {
+                const rect = canvas.getBoundingClientRect();
+                let clientX = e.clientX || (e.touches && e.touches[0].clientX);
+                let inputX = clientX - rect.left; inputX = Math.max(10, Math.min(width - 10, inputX));
+                saws.push(new Saw(inputX, -50, 1)); energy = 0;
+            }
+        });
+        loop();
+    }
+
+    function initPixels() {
+        pixels = []; totalStartPixels = 0;
+        const rows = Math.ceil(height / PIXEL_SIZE); const cols = Math.ceil(width / PIXEL_SIZE);
+        const seedX = Math.random() * 1000; const seedY = Math.random() * 1000;
+        for (let y = 0; y < rows; y++) {
+            let row = [];
+            for (let x = 0; x < cols; x++) {
+                let surfaceHeight = (rows * 0.3) + (Math.sin(x * 0.05 + seedX) * 5) + (Math.sin(x * 0.12 + seedX) * 3);
+                if (y > surfaceHeight) {
+                    let n1 = Math.sin((x * 0.04) + seedX + (y * 0.03)); let n2 = Math.cos((x * 0.1) - (y * 0.08) + seedY); let n3 = Math.sin((x * 0.25) + (y * 0.25));
+                    let noiseValue = (n1 * 0.6) + (n2 * 0.3) + (n3 * 0.1); let normalizedNoise = (noiseValue + 1.5) / 3; 
+                    let depthFactor = y / rows; 
+                    let maxHealth = 500 + (normalizedNoise * 3000) + (depthFactor * 1000);
+                    let isBattery = false; let isBomb = false;
+                    if (normalizedNoise > 0.75) {
+                         if (Math.random() < 0.025) isBattery = true;
+                         else if (Math.random() < 0.02) isBomb = true;
+                    }
+                    row.push(new Pixel(x * PIXEL_SIZE, y * PIXEL_SIZE, isBattery, isBomb, maxHealth));
+                    totalStartPixels++;
+                } else { row.push(null); }
+            }
+            pixels.push(row);
+        }
+        currentPixels = totalStartPixels;
+    }
+
+    function endGame(victory) {
+        gameRunning = false; overlay.style.display = "flex";
+        if (victory) {
+            endTitle.innerText = "TEBRİKLER!"; endTitle.style.color = "#30ff30"; endScore.innerText = "Tüm pikseller temizlendi!";
+        } else {
+            endTitle.innerText = "BAŞARISIZ"; endTitle.style.color = "#ff4d4d";
+            let percentLeft = Math.floor((currentPixels / totalStartPixels) * 100); endScore.innerText = `Kalan: %${percentLeft} (Hedef: %1)`;
+        }
+    }
+
+    function updateTimer() {
+        if (!gameRunning) return;
+        let now = Date.now(); let dt = (now - lastTime) / 1000; lastTime = now; timeLeft -= dt;
+        let minutes = Math.floor(Math.max(0, timeLeft) / 60); let seconds = Math.floor(Math.max(0, timeLeft) % 60);
+        timerEl.innerText = `${minutes < 10 ? '0'+minutes : minutes}:${seconds < 10 ? '0'+seconds : seconds}`;
+        if (timeLeft <= 10) timerEl.classList.add('timer-danger');
+        let clearedPercent = (totalStartPixels - currentPixels) / totalStartPixels;
+        if (clearedPercent >= 0.99) endGame(true);
+        if (timeLeft <= 0) endGame(false);
+    }
+
+    function loop() {
+        if (!gameRunning) return;
+        updateTimer();
+        ctx.fillStyle = '#050510'; ctx.fillRect(0, 0, width, height);
+        if (energy < MAX_ENERGY) energy = Math.min(MAX_ENERGY, energy + REGEN_SPEED);
+        document.getElementById('energy-bar').style.width = energy + "%";
+        let containerEl = document.getElementById('energy-container');
+        if (energy >= MAX_ENERGY) { containerEl.className = 'ready'; document.getElementById('info').innerText = "ATMAK İÇİN DOKUN!"; } 
+        else { containerEl.className = ''; document.getElementById('info').innerText = "ENERJİ DOLUYOR..."; }
+
+        // Pikselleri çiz
+        for (let y = 0; y < pixels.length; y++) { for (let x = 0; x < pixels[y].length; x++) { if (pixels[y][x]) pixels[y][x].draw(); } }
+        
+        // YENİ: Parçacık efektlerini güncelle ve çiz
+        particles = particles.filter(p => p.life > 0);
+        particles.forEach(p => { p.update(); p.draw(ctx); });
+
+        // Parlama efektlerini çiz
+        ctx.save();
+        for (let i = explosionFx.length - 1; i >= 0; i--) {
+            let fx = explosionFx[i];
+            ctx.beginPath(); ctx.arc(fx.x, fx.y, fx.r, 0, Math.PI * 2);
+            let gradient = ctx.createRadialGradient(fx.x, fx.y, 0, fx.x, fx.y, fx.r);
+            gradient.addColorStop(0, `rgba(255, 255, 200, ${fx.alpha})`);
+            gradient.addColorStop(0.4, `rgba(255, 100, 0, ${fx.alpha * 0.8})`);
+            gradient.addColorStop(1, `rgba(255, 50, 0, 0)`);
+            ctx.fillStyle = gradient; ctx.fill();
+            fx.r += 5; fx.alpha -= 0.05;
+            if (fx.alpha <= 0) explosionFx.splice(i, 1);
+        }
+        ctx.restore();
+
+        // Testere fiziği ve çizimi
+        for (let i = 0; i < saws.length; i++) {
+            for (let j = i + 1; j < saws.length; j++) {
+                let s1 = saws[i], s2 = saws[j];
+                let dx = s1.x - s2.x; let dy = s1.y - s2.y; let dist = Math.sqrt(dx*dx + dy*dy); let minDist = s1.radius + s2.radius;
+                if (dist < minDist) {
+                    if (s1.value === s2.value && !s1.isMerging && !s2.isMerging) { s1.value++; s1.updateStats(); s2.isMerging = true; s1.vy = -3; } 
+                    else {
+                        let angle = Math.atan2(dy, dx); let pushX = Math.cos(angle) * 0.5; let pushY = Math.sin(angle) * 0.5;
+                        s1.vx += pushX; s1.vy += pushY; s2.vx -= pushX; s2.vy -= pushY; s1.vx *= 0.95; s1.vy *= 0.95; s2.vx *= 0.95; s2.vy *= 0.95;
+                        let overlap = minDist - dist; s1.x += Math.cos(angle) * overlap/2; s1.y += Math.sin(angle) * overlap/2; s2.x -= Math.cos(angle) * overlap/2; s2.y -= Math.sin(angle) * overlap/2;
+                    }
+                }
+            }
+        }
+        saws = saws.filter(s => !s.isMerging && s.y < height + 100);
+        saws.forEach(s => { s.update(); s.draw(); });
+        requestAnimationFrame(loop);
+    }
+
+    function resize() {
+        let winW = window.innerWidth; let winH = window.innerHeight; const targetRatio = 0.5;
+        if (winW / winH > targetRatio) { height = winH; width = height * targetRatio; } else { width = winW; height = width / targetRatio; }
+        container.style.width = width + 'px'; container.style.height = height + 'px'; canvas.width = width; canvas.height = height;
+    }
+    init();
+</script>
+</body>
+</html>
